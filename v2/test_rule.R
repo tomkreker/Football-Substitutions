@@ -1,216 +1,66 @@
-library(stringr)
-library(tree)
+# ESTIMATING THE EFFECT OF FOLLOWING SUBSTITUTION DECISION RULES USING GENETIC MATCHING
+
+# This script performs the second part of the analysis - estimating the effect of following
+# a given decision rule for substitutions, of the form "if behind, perform sub 1/2/3 by 
+# minutes T1/T2/T3, respectivey. Conceiving of following the rule as 'treatment', the main 
+# function identified instances of treatment and control units, the latter being teams that 
+# could have followed the rule (were behind on the relevant minutes) but did not do so. After
+# all matches scanned, genetic matching is used to form treatment and control groups that are 
+# similar on relevant characteristics - team stength, time behind, score at (potential) subbing
+# point, and the decision point in which they started following the rule. After matching, the 
+# effect of following the rule can be estimated by the difference of mean outcomes for both groups,
+# represented by binary variable that equals '1' if the team outscored their opponent from the moment
+# they began following the rule to the end of the game (i.e. they improved their goal differential)
+# or '0' otherwise. The treatment effect is the difference in means between the two groups.
+
+########################################################################################
+
 library(Matching)
 source('fell_behind.R') #define the function to calcualte when did a team fell behind
                         #used in building the test set
-##
-###
-#### Clean data: remove NAs and games with injuries and red cards
-###
-##
 
-allevents = read.csv('data.csv') #import data pre-processed in preprocessing.R
 
 ##
 ###
-#### Create a training set based on a random sample of half of the eligible matches
+#### Defining functions to support the main one that find treatment and control units
 ###
 ##
 
-random_matches = sample(unique(allevents$id_odsp),length(unique(allevents$id_odsp))/2) #select half the eliginle match on random
-train_set = allevents[which(allevents$id_odsp %in% random_matches),]
-sum(train_set$event_type==7) #final num of subs in sample
 
-#6/1/2020 - USING ALL THE DATA AS THE 'TRAINING'
-train_set = allevents
+#testevents = allevents[-which(allevents$id_odsp %in% random_matches),] #if testing on 1/2 of the data
+testevents = allevents #test for all the data
 
-
-BuildTraining = function(df){ 
-#Input: dataframe with events of substitutions to be used for fitting trees to find decision points  
-#Output: added variables with the number of sub, score at sub,if improved goal differential at the end
+htimes_behind = function(game){
+  # Auxiliary function that takes in a game ID and returns an array indexed by minute that
+  # has the current score from the home team's perspective for each minute
+  # Input: a dataframe of all events from a given game
+  # Output: a 100-length array with the hscore (home score) at each minute
   
-  numsub=c() #length of subs
-  goaldifsub=c() #length of subs
-  home_final_scores=rep(NA,length(unique(df$id_odsp))) #length of matches
-  names(home_final_scores) = (unique(df$id_odsp))
-  hscore=0
-  ascore=0
-  asub=1
-  hsub=1 
-  
-  #handle first row
-  if(df[1,'event_type']==7){ #if sub
-    if (df[1,'side']==1){
-      numsub = c(numsub,hsub)
-      goaldifsub = c(goaldifsub,hscore-ascore)
-      hsub=hsub+1
-    }
-    else{
-      numsub = c(numsub,asub)
-      goaldifsub = c(goaldifsub,ascore-hscore)
-      asub=asub+1
-    }
+  score = 0
+  goals = game[which(game$is_goal==1),'time']
+  sides = game[which(game$is_goal==1),'side']
+  sides[which(sides==2)]=-1
+  result = rep(0,100)
+  score=0
+  #return (c(goals,sides))
+  if (length(goals)>1){
+    for (i in 1:(length(goals)-1)){
+      score = score + sides[i]
+      result[goals[i]:goals[i+1]]=score
+    }  
   }
-  if(df[1,'is_goal']==1){ #if goal
-    if (df[1,'side']==1){hscore = hscore+1}
-    else{ascore = ascore+1}
-  }
-  
-  for (i in (2:nrow(df))){ #now for every other row
-    if (df[i,'id_odsp']!=df[i-1,'id_odsp']){ #a new game has started
-      name=(df[i-1,'id_odsp'])
-      home_final_scores[name] =  hscore-ascore
-      hscore=0
-      ascore=0
-      asub=1
-      hsub=1
-    }
-    
-    if(df[i,'event_type']==7){ #if sub
-      if (df[i,'side']==1){
-        numsub = c(numsub,hsub)
-        goaldifsub = c(goaldifsub,hscore-ascore)
-        hsub=hsub+1
-        }
-      else{
-        numsub = c(numsub,asub)
-        goaldifsub = c(goaldifsub,ascore-hscore)
-        asub=asub+1
-        }
-    }
-    if(df[i,'is_goal']==1){ #if goal
-      if (df[i,'side']==1){hscore = hscore+1}
-      else{ascore = ascore+1}
-    }
-    
-  }
-  name=(df[i,'id_odsp'])
-  home_final_scores[name] =  hscore-ascore #update final score for the final match
-  
-  subs = df[which(df$event_type==7),]
-  subs$numsub = numsub
-  subs$goaldifsub= goaldifsub
-  goaldiffin= rep(0,nrow(subs))
-  for (i in 1:nrow(subs)){
-    name = (subs[i,'id_odsp'])
-    goaldiffin[i]=home_final_scores[name]
-    if (subs[i,'side']==2){#if it is an away sub, switch signs of the score
-      goaldiffin[i] = goaldiffin[i]*(-1)
-    }
-  }
-  subs$goaldiffin=goaldiffin
-  subs$goal_diff_improve = subs$goaldiffin - subs$goaldifsub
-  goal_diff_improve01 = rep(0,nrow(subs))
-  goal_diff_improve01[which(subs$goal_diff_improve>0)]=1 #binary outcome as in Myers
-  subs$goal_diff_improve01 = goal_diff_improve01
-  
-  return (subs)
+  if (length(goals)>0){
+    result[goals[length(goals)]:100] = score + sides[length(sides)]}
+  return(result)
 }
 
-#run the function on the training sample matches to get the subs with the required variables
-train_with_variables =  BuildTraining(train_set)
-remove = which(train_with_variables$id_odsp %in% train_with_variables[which(train_with_variables$numsub>3),'id_odsp']) #few matches with faulty data
-train_with_variables = train_with_variables[-remove,] 
-train_with_variables$goal_diff_improve01 = as.factor(train_with_variables$goal_diff_improve01)
-
-#create subsets to fit trees per substitute category
-train_behind = train_with_variables[which(train_with_variables$goaldifsub<0),] #only games behind - ~4500 subs
-first_train_behind = train_behind[which(train_behind$numsub==1),] #1st subs
-mean(as.numeric((first_train_behind$goal_diff_improve01))-1) #average success
-
-second_train_behind =train_behind[which(train_behind$numsub==2),] #2nd subs
-mean(as.numeric((second_train_behind$goal_diff_improve01))-1) #average success
-
-third_train_behind = train_behind[which(train_behind$numsub==3),] #3rd subs
-mean(as.numeric((third_train_behind$goal_diff_improve01))-1) #average success
-
-#Auxiliary functions to 'mimic' tree activity for the first split (as explained in Appendix A)
-#And obtain p-values provided in the Table 1
-
-before_after_minute = function(df){ 
-#Input: training dataset with columns 'time', 'goal_diff_improve01'
-#Output: List of all differences in mean outcomes before and after each given minute
-  best=0
-  minute=0
-  times = c()
-  diffs = c()
-  bef = c()
-  aft = c()
-  for(m in min(df$time):max(df$time)){
-    bef = c(bef, nrow(df[which(df$time<m+0.5),]))
-    aft = c(aft, nrow(df[which(df$time>m+0.5),]))
-    prior = mean(as.numeric(df[which(df$time<(m+0.5)),'goal_diff_improve01']))
-    post = mean(as.numeric(df[which(df$time>(m+0.5)),'goal_diff_improve01']))
-    dif = prior-post
-    if (is.na(post)){dif=prior}
-    if (is.na(prior)){dif=post}
-    
-    times = c(times,m+0.5)
-    diffs=c(diffs,dif)
-    if (dif > best){
-      best=prior
-      minute=m
-    }
-  }
-  return(data.frame(time=times,difference=diffs,n_before=bef,n_after=aft))
+hscore_at_t = function(game,t){
+  # Returns the score at a given time for the home team in a given match
+  return(sum(game$is_goal==1 & game$time<t & game$side==1) -
+           sum(game$is_goal==1 & game$time<t & game$side==2))
 }
 
-pvalue = function(df,m){ #perform t-test between the before-after groups for Table 1 
-  
-  cat('subs before',m,'minute:',length(df[which(df$time<m),'goal_diff_improve01']))
-  cat('\nsubs after',m,'minute:',length(df[which(df$time>m),'goal_diff_improve01']))
-  t.test(as.numeric(df[which(df$time<m),'goal_diff_improve01'])-1,  
-         y = as.numeric(df[which(df$time>m),'goal_diff_improve01'])-1, 
-         alternative = "greater", mu = 0)
-}
-
-##
-###
-#### Fit trees to training set to find potential decision rule
-###
-##
-
-library(rpart)
-tree1 = rpart(goal_diff_improve01~time,data=first_train_behind, method='anova')
-tree1
-mimic = before_after_minute(first_train_behind)
-round(mimic,3)
-#
-## Figure in Appendix A
-#
-plot(mimic$time[6:66],mimic$difference[6:66], xlab='Minute',ylab ='Before-After Mean Success Difference',
-     main='First Sub Mean Before-After Success by Minute',pch=16)
-abline(v=64.5,lty=2)
-text('64.5: largest before-after difference',x=48,y=-0.06)
-pvalue(first_train_behind,64.5) #p-value is 0.0001424 - but this is not the correct metric for tree
-#
-##
-#
-
-tree2 = rpart(goal_diff_improve01~time,data=second_train_behind, method='anova')
-tree2 #obtain before and after proportions
-pvalue(second_train_behind,69.5) #p=3.117e-07
-
-tree3 = rpart(goal_diff_improve01~time,data=third_train_behind, method='anova')
-#tree3_best = rtree
-tree3 #obtain before and after proportions
-pvalue(third_train_behind,77.5) #p=6.54e-08
-
-
-
-##
-###
-#### Testing the rule on the other half of the data: unused matches
-###
-##
-
-
-testevents = allevents[-which(allevents$id_odsp %in% random_matches),] #the other 2173 matches unused for training
-
-#6.1.10 NO TRAIN/TEST - always use ALL
-testevents = allevents
-
-new_Build_test_set = function(df,t1,t2,t3){
+build_test_rule = function(df,t1,t2,t3){
 #Input: dataframe with match events unused in building the rule, the three decision points of the rule
 #Output: A dataframe where each row is a match situation in which a team could (defier) or did (followers)
 #follow the rule, including various in-game (part 1) and pre-game (part 2) covariates and the outcome for that team
@@ -231,20 +81,17 @@ new_Build_test_set = function(df,t1,t2,t3){
     game = df[which(df$id_odsp==g),]
     
     #Find out the score at and subs prior to each decsion point for home team
-    hgoals_t1 = sum(game$is_goal==1 & game$time<t1 & game$side==1) -
-      sum(game$is_goal==1 & game$time<t1 & game$side==2)
-    hgoals_t2 = sum(game$is_goal==1 & game$time<t2 & game$side==1) -
-      sum(game$is_goal==1 & game$time<t2 & game$side==2)
-    hgoals_t3 = sum(game$is_goal==1 & game$time<t3 & game$side==1) -
-      sum(game$is_goal==1 & game$time<t3 & game$side==2)
-    hgoals_fin = sum(game$is_goal==1 & game$side==1) -
-      sum(game$is_goal==1 & game$side==2)
+    hgoals_t1 = hscore_at_t(game,t1)
+    hgoals_t2 = hscore_at_t(game,t2)
+    hgoals_t3 = hscore_at_t(game,t3)
+    hgoals_fin = hscore_at_t(game,120)
     
-    hsubs = game[which(game$event_type==7 & game$side==1),'time']
+    hsubs = game[which(game$event_type==7 & game$side==1),'time'] #an array of sub times
     
     while(length(hsubs)<3){ #add 1 as sub time if team did not make all three subs
-      hsubs = c(hsubs,99)
+      hsubs = c(hsubs,120) #if there was no 3 subs, make sure the array is length 3 with late times
     }
+    # number of subs performed before each timepoint
     hsubs_at_t1 = sum(game$event_type==7 & game$time<t1 & game$side==1)
     hsubs_at_t2 = sum(game$event_type==7 & game$time<t2 & game$side==1)
     hsubs_at_t3 = sum(game$event_type==7 & game$time<t3 & game$side==1)
@@ -262,35 +109,36 @@ new_Build_test_set = function(df,t1,t2,t3){
     asubs_at_t1 = sum(game$event_type==7 & game$time<t1& game$side==2)
     asubs_at_t2 = sum(game$event_type==7 & game$time<t2& game$side==2)
     asubs_at_t3 = sum(game$event_type==7 & game$time<t3& game$side==2)
-    
+
     #Set game variables to zero - whether a team failed to follow, when started
     hfailed=FALSE
     hstart_follow=0
     afailed=FALSE
     astart_follow=0
-    scoreline = htimes_behind(game)#get hscore at every minute
+    scoreline = htimes_behind(game) #get score for home team at every minute
     
-    ############## Chance point #1 ##########################
+    ######################### Chance point #1 ##########################
+    
+    # Home team
     
     if (sum(scoreline[1:(t1-0.5)]<0) > 0){ #home team was behind any point before t1 
-      fb = (which(scoreline[1:(t1-0.5)] %in% c(-7:-1)))
+      fb = (which(scoreline[1:(t1-0.5)] %in% c(-7:-1))) # all minutes in which home was behind
       tb = t1-0.5-fb[1]
       if (hsubs[1] < t1 && scoreline[hsubs[1]]<0 && hsubs[1] > fb[1]){ #home team was behind, subbed after conceding, before t1
         hstart_follow=1  
       }
     }
-    if (hgoals_t1 < 0 && tb > 4 && hsubs[1] > t1){ #the home team did not sub on time
-          hfailed=TRUE
-          could = c(could,g)
-          side = c(side,1)
-          #latest_trail = rev(which(scoreline[1:(t1-0.5)] %in% c(-7:-1)))[1]
-          when_follow = c(when_follow,-1)
-          score_when_could = c(score_when_could,hgoals_t1)
-          time_behind = c(time_behind,t1-0.5-fb[1])
-          outcome = c(outcome,(hgoals_fin - hgoals_t1))
+    if (hgoals_t1 < 0 && tb > 4 && hsubs[1] > t1){ #the home team did not sub on time - add control unit
+          hfailed=TRUE #failed to follow - no further checks later
+          could = c(could,g) #adding the game ID
+          side = c(side,1) #adding the side
+          when_follow = c(when_follow,-1) #failed at decision point 1
+          score_when_could = c(score_when_could,hgoals_t1) #score at latest point - t1
+          time_behind = c(time_behind,t1-0.5-fb[1]) #time the team was behind
+          outcome = c(outcome,(hgoals_fin - hgoals_t1)) #outcome from t1 to end
     }
     
-  #away
+    # Away team - exactly the same process using the away variables
   
     if (sum(scoreline[1:(t1-0.5)]>0) > 0){ #away team was behind at any point before t1 
       fb = (which(scoreline[1:(t1-0.5)] %in% c(1:7)))
@@ -310,7 +158,9 @@ new_Build_test_set = function(df,t1,t2,t3){
         outcome = c(outcome,(agoals_fin - agoals_t1))
     }
     
-    ############## Chance point #2 ##########################
+    ######################## Chance point #2 ##########################
+    # Home team
+    
     if (sum(scoreline[(t1-0.5):(t2-0.5)]<0) > 0 && hfailed==FALSE){ #home team was behind for at least 5m before t2
       fb = (which(scoreline[1:(t2-0.5)] %in% c(-7:-1)))
       tb = t2-0.5-fb[1]
@@ -323,24 +173,22 @@ new_Build_test_set = function(df,t1,t2,t3){
         hfailed=TRUE
         could = c(could,g)
         side = c(side,1)
-        if (hstart_follow==1){
+        if (hstart_follow==1){ #if the team started following and now failed
           when_follow = c(when_follow,-1)
           score_when_could = c(score_when_could,hgoals_t1)
           tb = sum(scoreline[1:hsubs[1]]<0)
           time_behind = c(time_behind,tb)
           
           }
-        else {
+        else { #if the team did not have a chance at t1 and only could now
           when_follow = c(when_follow,-2)
           score_when_could = c(score_when_could,hgoals_t2)
           time_behind = c(time_behind,t2-0.5-fb[1])
           }
-        
-        #latest_trail = rev(which(scoreline[(t1-0.5):(t2-0.5)] %in% c(-7:-1)))[1]
         outcome = c(outcome,(hgoals_fin - hgoals_t2)) 
       }
     
-    #away 
+    # Away team
     
     if (sum(scoreline[(t1-0.5):(t2-0.5)]>0) > 0 && hfailed==FALSE){ #away team was behind for at least 5m at any point before t1 
       fb = (which(scoreline[1:(t2-0.5)] %in% c(1:7)))
@@ -358,7 +206,6 @@ new_Build_test_set = function(df,t1,t2,t3){
           score_when_could = c(score_when_could,agoals_t1)
           tb = sum(scoreline[1:asubs[1]]>0)
           time_behind = c(time_behind,tb)
-          
         }
         else {
           when_follow = c(when_follow,-2)
@@ -366,12 +213,12 @@ new_Build_test_set = function(df,t1,t2,t3){
           time_behind = c(time_behind,t2-0.5-fb[1])
           
         }
-        
-        #latest_trail = rev(which(scoreline[(t1-0.5):(t2-0.5)] %in% c(-7:-1)))[1]
         outcome = c(outcome,(agoals_fin - agoals_t2))
     }
       
-    ############## Chance point #3 ##########################
+    ############################## Chance point #3 ##########################
+    # Home team
+    
     if (sum(scoreline[(t2-0.5):(t3-0.5)]<0) > 0 && hfailed==FALSE){ #home team was behind for at least 5m at any point before t1 
       fb = (which(scoreline[1:(t3-0.5)] %in% c(-7:-1)))
       tb = t3-0.5-fb[1]
@@ -406,11 +253,10 @@ new_Build_test_set = function(df,t1,t2,t3){
             
           }  
         }
-        #latest_trail = rev(which(scoreline[(t1-0.5):(t2-0.5)] %in% c(-7:-1)))[1]
         outcome = c(outcome,(hgoals_fin - hgoals_t3))
       }
     
-    #away 
+    # Away team 
     
     if (sum(scoreline[(t2-0.5):(t3-0.5)]>0) > 0 && hfailed==FALSE){ #away team was behind for at least 5m at any point before t1 
       fb = (which(scoreline[1:(t3-0.5)] %in% c(1:7)))
@@ -453,6 +299,7 @@ new_Build_test_set = function(df,t1,t2,t3){
     }
     
     ################# Final check for success ##################
+    #Home teamm
     if (hfailed == FALSE & hstart_follow>0){ #home team success
       could = c(could,g)
       side = c(side,1)
@@ -473,6 +320,8 @@ new_Build_test_set = function(df,t1,t2,t3){
         time_behind = c(time_behind,(tb))
         outcome = c(outcome,(hgoals_fin - scoreline[hsubs[3]]))}
     }
+    # Away team
+    
     if (afailed == FALSE & astart_follow>0){ #away team success
       could = c(could,g)
       side = c(side,2)
@@ -493,59 +342,66 @@ new_Build_test_set = function(df,t1,t2,t3){
         time_behind = c(time_behind,(tb))
         outcome = c(outcome,(agoals_fin - -1*scoreline[asubs[3]]))}
     }
-    ############# Adding multiple control units for failed ###########
+    ############# Adding multiple control units for failed - potential extension ###########
+    
+    #when I create control units, create not only for the failture at t, but when I know
+    #they failed I can create a counterfactual for another treatment unit using their situation 2,3,4,5
+    #etc. minutes before Tx, as long as they were behind, using the 'time behind' and score for these 
+    #minutes to generate more control units (remember the interpretation is follow potential).
+    #this is similar to the derivation of the rule idea - just in this case I would consider each 
+    #numsub and minute as covariates, and generate controls ONLY with those who had less subs as I wrote
+    #in the notebook. This way also adds a nice twist - to suit the inquiry for top-tier questions (what
+    #minutes are best for them, maybe wait longer?) I can choose treatment group only with high odds.
+    #that could be a nice last section for the analysis.
     #if (hfailed){
     #  
     #}
     #if(afailed){
     #  #same
     #}
+    ###################################################################################
   }
       
-  #organize relevant columns
+  #organize relevant columns - treatment and outcome binary indicators
   treatment = rep(0,length(when_follow))
-  treatment[which(when_follow>0)]=1
-  when_follow = abs(when_follow)
+  treatment[which(when_follow>0)]=1 #treatment indicator
+  when_follow = abs(when_follow) #decision point for matching - when could the team start follow
   binary_outcome = rep(0,length(outcome))
   binary_outcome[which(outcome>0)]=1
   
-  test_set = data.frame(id_odsp=could,side=side,chance=when_follow,score_at_chance=score_when_could,
+  test_rule = data.frame(id_odsp=could,side=side,chance=when_follow,score_at_chance=score_when_could,
                      time_behind=time_behind,treatment=treatment,outcome=outcome,
                      binary_outcome=binary_outcome)
   
   ###
   #### Part 2: Fetch game info
   ###
-  test_set$id_odsp = as.character(test_set$id_odsp)
+  test_rule$id_odsp = as.character(test_rule$id_odsp)
   matchinfo = read.csv('ginf.csv')
   games = matchinfo[,c(1,5,6,7,12:14)]
-  games = games[which(games$id_odsp %in% test_set$id_odsp),]
+  games = games[which(games$id_odsp %in% test_rule$id_odsp),]
   games$id_odsp = as.character(games$id_odsp)
   odds = c()
   odds2 = c()
-  for (i in 1:nrow(test_set)){
-    odds_diff_h =  games[which(games$id_odsp==test_set[i,'id_odsp']),'odd_h'] - 
-      games[which(games$id_odsp==test_set[i,'id_odsp']),'odd_a']
-    if (test_set[i,'side']==1){
+  for (i in 1:nrow(test_rule)){
+    odds_diff_h =  games[which(games$id_odsp==test_rule[i,'id_odsp']),'odd_h'] - 
+      games[which(games$id_odsp==test_rule[i,'id_odsp']),'odd_a']
+    if (test_rule[i,'side']==1){
       odds = c(odds, odds_diff_h)
       odds2 = c(odds2, sign(odds_diff_h)*odds_diff_h^2)}
     else{
       odds = c(odds, -1*odds_diff_h)
       odds2 = c(odds2, sign(-1*odds_diff_h)*odds_diff_h^2)}
   }
-  test_set$odds = odds
-  test_set$odds2 = odds2
+  test_rule$odds = odds
+  test_rule$odds2 = odds2
   
-  return(test_set)
+  return(test_rule)
 }
 #consider changing to ratio
 
-#trial = new_Build_test_set(testevents[1:100,],64.5,69.5,77.5) #build test set based on the decision rule
-
-test_set = new_Build_test_set(testevents,64.5,69.5,77.5) #build test set based on the decision rule
-#this is lower than the 9 minutes because it's cases that DID sub - that's reasonable to do in 5m.
-#test_time_1 = test_set[which(test_set$chance==1),] #only those who could start from point 1
-test_time_1 = test_set
+#trial = build_test_rule(testevents[1:100,],64.5,69.5,77.5) #testing the function with a few records
+test_rule = build_test_rule(testevents,64.5,69.5,77.5) #build test set based on the decision rule
 
 ##
 ###
@@ -554,61 +410,44 @@ test_time_1 = test_set
 ##
 
 #Define covariates to match on - presented in Table 2
-#X = cbind(test_time_1$score_at_chance,test_time_1$time_behind,
-#            test_time_1$odds,test_time_1$odds2,test_time_1$side,I(test_time_1$score_at_chance^2),
-#            I(test_time_1$time_behind^2),I(test_time_1$score_at_chance*test_time_1$time_behind),
-#            I(test_time_1$odds*test_time_1$time_behind),I(test_time_1$odds*test_time_1$score_at_chance))
 
-X = cbind(test_time_1$chance,test_time_1$score_at_chance,test_time_1$time_behind,
-          test_time_1$odds,test_time_1$odds2,test_time_1$side,I(test_time_1$score_at_chance^2),
-          I(test_time_1$time_behind^2),I(test_time_1$score_at_chance*test_time_1$time_behind),
-          I(test_time_1$odds*test_time_1$time_behind),I(test_time_1$odds*test_time_1$score_at_chance))
+X = cbind(test_rule$chance,test_rule$score_at_chance,test_rule$time_behind,
+          test_rule$odds,test_rule$odds2,test_rule$side,I(test_rule$score_at_chance^2),
+          I(test_rule$time_behind^2),I(test_rule$score_at_chance*test_rule$time_behind),
+          I(test_rule$odds*test_rule$time_behind),I(test_rule$odds*test_rule$score_at_chance))
 
 caliper = c(0.25,0.25,0.25,0.25,0.25,100,100,100,100,100,100) 
 exact = rep(FALSE,length(caliper))
 exact[1]=TRUE
 
-genout = GenMatch(Tr=test_time_1$treatment,X=X, caliper=caliper,exact=exact,
+genout = GenMatch(Tr=test_rule$treatment,X=X, caliper=caliper,exact=exact,
                    pop.size = 500, wait.generations = 25) #run genetic matching
 
-mout = Match(Tr=test_time_1$treatment,X=X,caliper=caliper,exact=exact
+mout = Match(Tr=test_rule$treatment,X=X,caliper=caliper,exact=exact
              ,Weight.matrix = genout)
 
 #
-##Before and after matching balance - data presented in Table 2
+## Before and after matching balance - data presented in Table 2
 #
 MatchBalance(treatment~chance+score_at_chance+time_behind+odds+odds2+side+
                I(score_at_chance^2)+I(time_behind^2)+I(score_at_chance*time_behind)+
-               I(odds*time_behind)+I(odds*score_at_chance),data=test_time_1,match.out = mout) 
-#
-##
-#
+               I(odds*time_behind)+I(odds*score_at_chance),data=test_rule,match.out = mout) 
+
 summary(mout) #examine number of followers and defiers remained
 
-Ymout = Match(Y=test_time_1$binary_outcome,Tr=test_time_1$treatment,X=X,caliper=caliper,exact=exact,
-              Weight.matrix = genout) #obtain effect
+Ymout = Match(Y=test_rule$binary_outcome,Tr=test_rule$treatment,X=X,caliper=caliper,exact=exact,
+              Weight.matrix = genout) #obtain effect when satisfied with the balance
 
 summary(Ymout)
 
-mean(test_time_1[mout$index.treated,'binary_outcome']) # % success in matched follower
-mean(test_time_1[mout$index.control,'binary_outcome']) # % success in matched defiers 
+mean(test_rule[mout$index.treated,'binary_outcome']) # % success in matched follower
+mean(test_rule[mout$index.control,'binary_outcome']) # % success in matched defiers 
 
 #Sensitivity test
 library(rbounds)
-#sensitivity test
 psens(Ymout,Gamma=2,GammaInc=0.1) 
 hlsens(Ymout,Gamma=2,GammaInc=0.1) 
 
-
-#25.12 change: when I create control units, create not only for the failture at t, but when I know
-#they failed I can create a counterfactual for another treatment unit using their situation 2,3,4,5
-#etc. minutes before Tx, as long as they were behind, using the 'time behind' and score for these 
-#minutes to generate more control units (remember the interpretation is follow potential).
-#this is similar to the derivation of the rule idea - just in this case I would consider each 
-#numsub and minute as covariates, and generate controls ONLY with those who had less subs as I wrote
-#in the notebook. This way also adds a nice twist - to suit the inquiry for top-tier questions (what
-#minutes are best for them, maybe wait longer?) I can choose treatment group only with high odds.
-#that could be a nice last section for the analysis.
 
 ##
 ###
@@ -616,9 +455,8 @@ hlsens(Ymout,Gamma=2,GammaInc=0.1)
 ###
 ##
 
-#6.1.10 NO TRAIN/TEST - always use ALL
 testevents = allevents
-test_myers = Build_test_set(allevents,57.5,72.5,78.5) #build test-set based on the decision rule
+test_myers = Build_test_rule(allevents,57.5,72.5,78.5) #build test-set based on the decision rule
 #test_myers = test_myers[which(test_myers$chance==1 & test_myers$time_behind>7),]
 
 Xmyers = cbind(test_myers$chance, test_myers$score_at_chance,test_myers$time_behind,

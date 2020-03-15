@@ -1,8 +1,16 @@
+###
+####
+###
+
 # This scripts processes the original dataset of 900k match events as downloaded from
 # https://www.kaggle.com/secareanualin/football-events
 # So only substitutions and goals, with their relevant columns, are left.
 # This allows to store the data file on github, which is otherwisie 200mb.
 # The original data file is refered to as 'events.csv'.
+
+###
+####
+###
 
 library(stringr)
 foo = read.csv('events.csv') #import data

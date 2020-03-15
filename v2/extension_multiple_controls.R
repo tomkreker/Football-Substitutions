@@ -1,3 +1,25 @@
+###
+####
+###
+
+# This scripts takes a different approach at obtaining the treatment effect by generating
+# 'control units' for each performed substitution, using matches that had one less sub than
+# the considered match (so for the 3rd sub, find a match that had 2 subs, and the minute
+# at which the team COULD HAVE made the 3rd but did not). THEN, after each sub has a control
+# sub, obtain the estimated treatment effect of each sub, and based on THAT try to derive the
+# minutes of ideal subs and in turn a decision rule. The splits from these trees should make the
+# idea decision rule.
+
+# 15/3 - I need to re-run this code and see where it stands, this was left semi-working
+# In any case, this is also secondary to the traversal of the rule space derived through
+# the main method, which has higher priority because it could lead to a well-formed paper,
+# this could be an extension or validation.
+
+###
+####
+###
+
+
 # Generating counterfactuals for all individual subs
 matchinfo = read.csv('ginf.csv')
 
@@ -11,7 +33,6 @@ random_matches = sample(unique(allevents$id_odsp),length(unique(allevents$id_ods
 
 train_set = allevents[which(allevents$id_odsp %in% random_matches),]
 sum(train_set$event_type==7) #final num of subs in sample
-train_set = train_set[,c(1,4,6,8,17)]
 train_set$id_odsp = as.character(train_set$id_odsp)
 
 get_numsubs = function(train_set){
@@ -267,4 +288,4 @@ print(tree2_match)
 
 
 #code to view the subs and goals of a given game
-allevents[which(allevents$id_odsp=='M3FzCtd9/'),c(1,4,6,8,17)]
+#allevents[which(allevents$id_odsp=='M3FzCtd9/'),]

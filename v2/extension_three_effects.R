@@ -1,3 +1,20 @@
+###
+####
+###
+
+# This script contains an alternative 'test set' constructor that considers three
+# different treatment effects for each of the substitution rather than a joint one
+# as a result of following a decision rule made of the three points derived by the 
+# three trees. 
+
+# 15/3 - this is deprioritized at the moment as the main part is to traverse the 
+# rule space of three points. Also, it makes more sense to think of these combined
+# because the effect of sub 1 is still there for sub 2, and so on.
+
+###
+####
+###
+
 
 Build_test_alt = function(df,t1,t2,t3){
   #Input: dataframe with match events to find the effect of subbing in various 1st/2nd/3rd sub timings
